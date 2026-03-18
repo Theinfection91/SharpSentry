@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SharpSentry.Analysis/SharpSentry.Analysis.csproj" />
+    <Project Path="src/SharpSentry.Core/SharpSentry.Core.csproj" />
+    <Project Path="src/SharpSentry.Dashboard/SharpSentry.Dashboard.csproj" />
+    <Project Path="src/SharpSentry.Infrastructure/SharpSentry.Infrastructure.csproj" />
+    <Project Path="src/SharpSentry.Worker/SharpSentry.Worker.csproj" />
+  </Folder>
+</Solution>
