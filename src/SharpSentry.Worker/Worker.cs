@@ -1,4 +1,6 @@
 using SharpSentry.Analysis;
+using SharpSentry.Infrastructure;
+using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 
 namespace SharpSentry.Worker;
@@ -11,10 +13,15 @@ namespace SharpSentry.Worker;
 internal sealed class SentryWorker(
     ILogger<SentryWorker> logger,
     CodeAnalyzer analyzer,
+    IServiceScopeFactory scopeFactory,
     IConfiguration configuration) : BackgroundService
 {
     private FileSystemWatcher? _watcher;
     private CancellationTokenSource? _stoppingCts;
+    private readonly ConcurrentDictionary<string, long> _lastEnqueued =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private const long DebounceMs = 500;
 
     /// <inheritdoc/>
     public override Task StartAsync(CancellationToken cancellationToken)
@@ -76,6 +83,14 @@ internal sealed class SentryWorker(
 
     private void OnFileChanged(object sender, FileSystemEventArgs e)
     {
+        var now = Environment.TickCount64;
+
+        // Drop duplicate events fired by FileSystemWatcher for the same save operation.
+        if (_lastEnqueued.TryGetValue(e.FullPath, out var last) && now - last < DebounceMs)
+            return;
+
+        _lastEnqueued[e.FullPath] = now;
+
         var token = _stoppingCts?.Token ?? CancellationToken.None;
         _ = Task.Run(() => AnalyseFileAsync(e.FullPath, token), token);
     }
@@ -90,6 +105,9 @@ internal sealed class SentryWorker(
                 .AnalyseFileAsync(filePath, cancellationToken)
                 .ConfigureAwait(false);
 
+            using var scope = scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<SentryDbContext>();
+
             foreach (var m in metrics)
             {
                 if (m.IsAtRisk)
@@ -100,7 +118,11 @@ internal sealed class SentryWorker(
                 {
                     Log.MethodOk(logger, m.MethodName, m.CyclomaticComplexity, m.LinesOfCode);
                 }
+
+                db.MethodMetrics.Add(MethodMetricsEntity.FromDomain(m));
             }
+
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
